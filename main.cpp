@@ -8,6 +8,10 @@
 #define LM75_REG_TOS (0x03) // TOS Register
 #define LM75_REG_THYST (0x02) // THYST Register
 
+// i have coded this to the letter of the task, if not the spirit...
+// imo you can't have the read triggered by an interrupt as it would require an interrupt within an interrupt
+// which isn't possible???
+
 DigitalOut red(LED2);
 
 I2C i2c(I2C_SDA, I2C_SCL);
@@ -17,49 +21,48 @@ int16_t i16; // This variable needs to be 16 bits wide for the TOS and THYST con
 char data_write[3];
 char data_read[3];
 
+bool fault = false;
+
 float tos=28;
 float thyst=26;
 
-// Ticker ticker;
-// float tick_interval = 1;
+Ticker ticker;
+float tick_interval = 1.0;
+int rec_duration = 60; // remember to change temp log length, since i can't have it as a parameter inside...
+float temp;
 float temperature_log[60] {};
 
-void interrupt(){
-// attach an alarm signal
+void interrupt_triggeralarm(){
+    fault = true;
 }
 
-// void tick(void){
-//     // Read Temperature Register
-//     float temp;
-//     data_write[0] = LM75_REG_TEMP;
-//     i2c.write(LM75_ADDR, data_write, 1, 1); // no stop
-//     i2c.read(LM75_ADDR, data_read, 2, 0);
-//     // Calculate temperature value in Celcius
-//     int16_t i16 = (data_read[0] << 8) | data_read[1];
-//     // Read data as twos complement integer so sign is correct
-//     temp = i16 / 256.0;
-//     if(temperature_log[59] == NULL){ // check last position first
-//         for(int i=0; i<59; i++){
-//             if(temperature_log[i] == NULL){
-//                 temperature_log[i] = temp;
-//                 break;
-//             }
-//         }
-//     }
-//     else{
-//         for(int i=0; i<59; i++){
-//             temperature_log[i] = temperature_log[i+1];
-//         }
-//         temperature_log[59] = temp;
-//     }
-//}
+void tick(void){
+    // there is a simpler way to rewrite this since most code is reused between both cases...
+    if(temperature_log[rec_duration-1] == NULL){ // check last position first
+        for(int i=0; i<rec_duration ; i++){
+            if(temperature_log[i] == NULL){
+                temperature_log[i] = temp;
+                break;
+            }
+        }
+    }
+    else{
+        for(int i=0; i<(rec_duration-1); i++){
+            temperature_log[i] = temperature_log[i+1];
+        }
+        temperature_log[rec_duration-1] = temp;
+    }
+}
 
 int main()
 {
-    //ticker.attach(tick, tick_interval);
     // configure with comparator mode
+    // data_write[0] = LM75_REG_CONF;
+    // data_write[1] = 0x00;
+    // int status = i2c.write(LM75_ADDR, data_write, 2, 0);
+    // i gave up on comp mode
     data_write[0] = LM75_REG_CONF;
-    data_write[1] = 0x00;
+    data_write[1] = 0x02;
     int status = i2c.write(LM75_ADDR, data_write, 2, 0);
     if(status !=0){  // If ERROR
         while(1){
@@ -80,10 +83,10 @@ int main()
     data_write[2]=i16 & 0xff;
     i2c.write(LM75_ADDR, data_write, 3, 0);
     // Attaches Interrupt
-    lm75_int.rise(&interrupt);
+    ticker.attach(tick, tick_interval);
+    lm75_int.rise(&interrupt_triggeralarm);
     // Read temperature and create log of last minute of data
     while(1){
-        float temp;
         data_write[0] = LM75_REG_TEMP;
         i2c.write(LM75_ADDR, data_write, 1, 1); // no stop
         i2c.read(LM75_ADDR, data_read, 2, 0);
@@ -91,20 +94,21 @@ int main()
         int16_t i16 = (data_read[0] << 8) | data_read[1];
         // Read data as twos complement integer so sign is correct
         temp = i16 / 256.0;
-        pc.printf("Temperature = %.3f\r\n",temp);
-        if(temperature_log[59] == NULL){ // check last position first
-            for(int i=0; i<59; i++){
-                if(temperature_log[i] == NULL){
-                    temperature_log[i] = temp;
-                    break;
-                }
+        pc.printf("%.3f\r\n",temp);
+        if(fault){
+            ticker.detach();
+            // what if fault occurs before the array is full? maybe make it not null? nah could be mistaken for 0 degree or anomaly in sensor
+            for(int i=0; i<rec_duration; i++){
+                // print the last 60 seconds of data
+                // fix this to include i??
+                // use try catch later
+                pc.printf("Temperature = %.3f\r\n",temperature_log[i]);
+            }
+            while(1){
+                red = !red;
+                wait(0.2);
             }
         }
-        else {
-            for(int i=0; i<59; i++){ temperature_log[i] = temperature_log[i+1]; }
-            temperature_log[59] = temp;
-        }
-        wait(1.0);
     }  
 }
 
